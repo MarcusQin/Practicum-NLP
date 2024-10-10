@@ -1,0 +1,88 @@
+import re
+from nltk.corpus import stopwords
+from collections import Counter
+from transformers import pipeline
+from nltk.tokenize import sent_tokenize
+
+# 1. Clean text: remove non-alphabetic characters and convert to lowercase
+def clean_text(var_in):
+    tmp = re.sub("[^A-Za-z0-9'.,!?]+", " ", var_in).lower().strip()  # Retain apostrophes, punctuation for sentence splitting
+    return tmp
+
+# 2. Calculate word likelihood (frequency of a specific word in the text)
+def word_likelihood(df_in, word_in):
+    tmp = None
+    try:
+        if not isinstance(df_in, pd.Series):
+            raise TypeError("df_in should be a Pandas Series")
+        
+        tmp = df_in.str.cat(sep=" ")  # Concatenate all rows into a single string
+        t_list = tmp.split()  # Split into words
+        denom = len(t_list)
+        numer = t_list.count(word_in)
+        if denom == 0:
+            raise ZeroDivisionError("No words found to calculate likelihood.")
+        tmp = numer / denom
+    except ZeroDivisionError:
+        print(f"No words found in the text to calculate likelihood for '{word_in}'.")
+    except AttributeError:
+        print(f"Invalid data type passed for df_in: {type(df_in)}.")
+    return tmp
+
+# 3. Remove stopwords from the text
+def rem_sw(var_in):
+    sw = stopwords.words('english')  # Get stopwords
+    t_list = [word for word in var_in.split() if word not in sw and len(word) > 1]  # Remove stopwords and single letters
+    t_out = " ".join(t_list)
+    return t_out
+
+# 4. Count word frequency using collections.Counter for efficiency
+def wrd_freq(var_in):
+    return dict(Counter(var_in.split()))
+
+# 5. Summarization function using Hugging Face transformers
+def summarize_text(text, max_chunk_size=500):
+    summarizer = pipeline("summarization")
+
+    # Tokenize text into sentences and group them into chunks of max_chunk_size characters
+    sentences = sent_tokenize(text)
+    text_chunks = []
+    chunk = ""
+    for sentence in sentences:
+        if len(chunk) + len(sentence) <= max_chunk_size:
+            chunk += " " + sentence
+        else:
+            text_chunks.append(chunk.strip())
+            chunk = sentence
+    if chunk:
+        text_chunks.append(chunk.strip())
+
+    # Summarize each chunk separately and combine the results
+    summaries = []
+    for chunk in text_chunks:
+        summary = summarizer(chunk, max_length=150, min_length=30, do_sample=False)
+        summaries.append(summary[0]['summary_text'])
+    
+    # Combine all summaries into one final summary, with line breaks for readability
+    final_summary = '\n\n'.join(summaries)
+    return final_summary
+
+# Example usage
+if __name__ == "__main__":
+    text = "The high profile success of DL at big technology companies has led to high interest in adopting state-of-the-art DL models at smaller companies in the Web, enterprise, and healthcare sectors, as well as among domain scientists and in digital humanities. Large neural architectures such as Transformers and other so-called “foundation models” [5] now dominate NLP and have multiple billions of parameters, e.g., BERT-Large [8], GPT-3 [45], and Megatron-LM [43]. Interest in such large models is also growing in computer vision (e.g., [9]) and for tasks bridging NLP and tabular data [51]. Moreover, the popularity of transfer learning using base models provided by public libraries such as HuggingFace [10] is powering a massive shift toward “low-data large-model” training setups [5]. Alas, three key systems- and economics-related bottlenecks are impeding the Preprint. Under review.adoption of such powerful models by DL users outside of big technology companies: (1) GPU memory capacity trailing DL model sizes [44], (2) high computational/cost/energy footprints of GPUclusters, and (3) high demand for GPUs relative to supply, including on public clouds. Thus, ensuring overall resource efficiency, as well as enabling DL users to make do with fewer GPUs and/or cheaper GPUs is a pressing research concern to ensure that the potential of large-scale DL models are accessible to the many, not just the few. The main approach practiced today to mitigate bottleneck (1) above (viz., GPU memory limits) is to partition the model’s neural computational graph across multiple GPUs to lower its memory footprint on each GPU. This form of execution, known as model-parallelism, is increasingly popular [3]. However, model-parallelism suffers from two fundamental issues. First, sequential dependencies within the neural architecture causes resource idling (busy waiting) and thus, GPU underutilization. Figure 1(C) illustrates how devices can be blocked while waiting for intermediate data to be passed forward/backward by earlier stages of the model. However, this issue is mitigated to an extent by pipeline-parallelism, which shuttles different batches of data through different stages of the model in parallel. Another technique known as tensor-parallelism, which divides a model width-wise, can also help [22]. We explain more about these techniques in Section 4. Nevertheless, some significant amount of resource idling is still inevitable in such techniques if one must preserve correctness (i.e., no heuristic approximations). Second, most DL users do not train just one model in a vacuum but rather do it as part of a larger multi-model execution scenario. Model selection needs such as tuning hyper-parameters and/or f ine-tuning some layers of the network is needed to control the balance of overfitting and underfitting on a new task and dataset [42]. That leads to multi-model execution. Multi-tenant clusters also see multiple models being trained together. In such scenarios, task-parallelism, viz., a job scheduler assigning different models to different workers, helps raise throughput of execution. But pure modelparallelism works directly against task parallelism in such cases. Raising the per-model footprint to multiple GPUs reduces the number of tasks one can run in parallel on a given cluster and/or forces users to raise their cluster sizes by trying to get even more (expensive) GPUs. Example. Consider a political scientist building a text classifier for sentiment analysis of tweets to understand polarization between gun rights and gun control supporters in the US. They download a state-of-the-art GPT-2 model from HuggingFace to fine-tune it. They decide to compare a few different learning rates and optimizers with a grid-search, leading to 48 different model configurations to train. Using an AWS P3 node in the N. Virginia region that offers Tesla V100 GPUs, they first try to train one model on a single 16GB GPU ($3.06/hr). Alas, the model’s size causes out-of-memory (OOM) errors, with both PyTorch and TensorFlow crashing. So, they switch to 4-GPU node to train it in a model-parallel manner, costing $12.24/hr. But then they realize that fine-tuning even for a few epochs could take multiple hours and grid search in a serial fashion (one model after another) would be too slow and take weeks. They consider manually overlaying task-parallelism on top of model-parallelism, costing them up to $590/hr. But AWS rate-limiting policies prohibits them from obtaining 192 GPUs, forcing them to either move up to a much more expensive GPU and/or suffer much longer runtimes. Anecdotally, these sorts of frustrations are now common among DL users. Overall, we observe that today’s DL systems have a dichotomy of model-parallelism and taskparallelism for multi-large-model DL workloads. This leads to substantial resource idling and GPU underutilization, which in turn leads to higher runtimes, costs, and energy footprints. In this paper, we start with a simple insight: the above dichotomy is a false dichotomy and we devise an approach that enables simultaneous task-parallel and model-parallel training of large DL models."
+    
+    # Step 1: Clean the text
+    cleaned_text = clean_text(text)
+    print(f"Cleaned Text: {cleaned_text}")
+
+    # Step 2: Remove stopwords
+    no_sw = rem_sw(cleaned_text)
+    print(f"Text without Stopwords: {no_sw}")
+
+    # Step 3: Count word frequencies
+    dict_words = wrd_freq(no_sw)
+    print(f"Word Frequency: {dict_words}")
+
+    # Step 4: Summarize the text
+    final_summary = summarize_text(text)
+    print(f"Summary: {final_summary}")
